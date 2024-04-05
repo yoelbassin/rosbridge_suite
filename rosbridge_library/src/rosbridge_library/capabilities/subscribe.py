@@ -33,11 +33,10 @@
 import fnmatch
 from functools import partial
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from rosbridge_library.util.models import CapabilityBaseModel
 from rosbridge_library.capability import Capability
-from rosbridge_library.internal.exceptions import InvalidArgumentException, MissingArgumentException
 from rosbridge_library.internal.pngcompression import encode as encode_png
 from rosbridge_library.internal.subscribers import manager
 from rosbridge_library.internal.subscription_modifiers import MessageHandler
@@ -49,6 +48,16 @@ except ImportError:
         from simplejson import dumps as encode_json
     except ImportError:
         from json import dumps as encode_json
+        
+class SubscribeModel(CapabilityBaseModel):
+    topic: str
+    id: Optional[Any] = None
+    type: Optional[str] = None
+    throttle_rate: Optional[int] = 0
+    fragment_size: Optional[int] = None
+    queue_length: Optional[int] = 0
+    compression: Optional[str] = "none"
+
 
 
 class Subscription:
@@ -72,7 +81,7 @@ class Subscription:
         self.publish = publish
         self.node_handle = node_handle
 
-        self.clients = {}
+        self.clients: Dict[str, Any] = {}
 
         self.handler = MessageHandler(None, self._publish)
         self.handler_lock = Lock()
@@ -86,13 +95,7 @@ class Subscription:
         self.clients.clear()
 
     def subscribe(
-        self,
-        sid=None,
-        msg_type=None,
-        throttle_rate=0,
-        queue_length=0,
-        fragment_size=None,
-        compression="none",
+        self, request: SubscribeModel
     ):
         """Add another client's subscription request
 
@@ -115,17 +118,17 @@ class Subscription:
         """
 
         client_details = {
-            "throttle_rate": throttle_rate,
-            "queue_length": queue_length,
-            "fragment_size": fragment_size,
-            "compression": compression,
+            "throttle_rate": request.throttle_rate,
+            "queue_length": request.queue_length,
+            "fragment_size": request.fragment_size,
+            "compression": request.compression,
         }
 
-        self.clients[sid] = client_details
+        self.clients[request.id] = client_details
 
         self.update_params()
 
-        raw = compression == "cbor-raw"
+        raw = request.compression == "cbor-raw"
 
         # Subscribe with the manager. This will propagate any exceptions
         manager.subscribe(
@@ -133,7 +136,7 @@ class Subscription:
             self.topic,
             self.on_msg,
             self.node_handle,
-            msg_type=msg_type,
+            msg_type=request.type,
             raw=raw,
         )
 
@@ -206,17 +209,6 @@ class Subscription:
             self.handler = self.handler.set_queue_length(self.queue_length)
 
 
-class SubscribeModel(CapabilityBaseModel):
-    topic: str
-    id: Optional[str] = None
-    type: Optional[str] = None
-    throttle_rate: Optional[int] = None
-    fragment_size: Optional[int] = None
-    queue_length: Optional[int] = None
-    compression: Optional[str] = None
-
-
-
 
 class Subscribe(Capability):
 
@@ -264,16 +256,7 @@ class Subscribe(Capability):
                 client_id, request.topic, cb, self.protocol.node_handle
             )
 
-        # Register the subscriber
-        subscribe_args = {
-            "sid": request.id,
-            "msg_type": msg.get("type", None),
-            "throttle_rate": msg.get("throttle_rate", 0),
-            "fragment_size": msg.get("fragment_size", None),
-            "queue_length": msg.get("queue_length", 0),
-            "compression": msg.get("compression", "none"),
-        }
-        self._subscriptions[request.topic].subscribe(**subscribe_args)
+        self._subscriptions[request.topic].subscribe(request)
 
         self.protocol.log("info", "Subscribed to %s" % request.topic)
 
