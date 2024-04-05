@@ -33,8 +33,11 @@
 import fnmatch
 from functools import partial
 from threading import Lock
+from typing import Any, Dict, List, Optional
 
+from rosbridge_library.util.models import CapabilityBaseModel
 from rosbridge_library.capability import Capability
+from rosbridge_library.internal.exceptions import InvalidArgumentException, MissingArgumentException
 from rosbridge_library.internal.pngcompression import encode as encode_png
 from rosbridge_library.internal.subscribers import manager
 from rosbridge_library.internal.subscription_modifiers import MessageHandler
@@ -203,16 +206,20 @@ class Subscription:
             self.handler = self.handler.set_queue_length(self.queue_length)
 
 
+class SubscribeModel(CapabilityBaseModel):
+    topic: str
+    id: Optional[str] = None
+    type: Optional[str] = None
+    throttle_rate: Optional[int] = None
+    fragment_size: Optional[int] = None
+    queue_length: Optional[int] = None
+    compression: Optional[str] = None
+
+
+
+
 class Subscribe(Capability):
 
-    subscribe_msg_fields = [
-        (True, "topic", str),
-        (False, "type", str),
-        (False, "throttle_rate", int),
-        (False, "fragment_size", int),
-        (False, "queue_length", int),
-        (False, "compression", str),
-    ]
     unsubscribe_msg_fields = [(True, "topic", str)]
 
     topics_glob = None
@@ -225,23 +232,16 @@ class Subscribe(Capability):
         protocol.register_operation("subscribe", self.subscribe)
         protocol.register_operation("unsubscribe", self.unsubscribe)
 
-        self._subscriptions = {}
+        self._subscriptions: Dict[str, Subscription] = {}
 
     def subscribe(self, msg):
-        # Pull out the ID
-        sid = msg.get("id", None)
-
-        # Check the args
-        self.basic_type_check(msg, self.subscribe_msg_fields)
-
-        # Make the subscription
-        topic = msg["topic"]
+        request = SubscribeModel.model_validate(msg)
 
         if Subscribe.topics_glob is not None and Subscribe.topics_glob:
-            self.protocol.log("debug", "Topic security glob enabled, checking topic: " + topic)
+            self.protocol.log("debug", "Topic security glob enabled, checking topic: " + request.topic)
             match = False
             for glob in Subscribe.topics_glob:
-                if fnmatch.fnmatch(topic, glob):
+                if fnmatch.fnmatch(request.topic, glob):
                     self.protocol.log(
                         "debug",
                         "Found match with glob " + glob + ", continuing subscription...",
@@ -251,31 +251,31 @@ class Subscribe(Capability):
             if not match:
                 self.protocol.log(
                     "warn",
-                    "No match found for topic, cancelling subscription to: " + topic,
+                    "No match found for topic, cancelling subscription to: " + request.topic,
                 )
                 return
         else:
             self.protocol.log("debug", "No topic security glob, not checking subscription.")
 
-        if topic not in self._subscriptions:
+        if request.topic not in self._subscriptions:
             client_id = self.protocol.client_id
-            cb = partial(self.publish, topic)
-            self._subscriptions[topic] = Subscription(
-                client_id, topic, cb, self.protocol.node_handle
+            cb = partial(self.publish, request.topic)
+            self._subscriptions[request.topic] = Subscription(
+                client_id, request.topic, cb, self.protocol.node_handle
             )
 
         # Register the subscriber
         subscribe_args = {
-            "sid": sid,
+            "sid": request.id,
             "msg_type": msg.get("type", None),
             "throttle_rate": msg.get("throttle_rate", 0),
             "fragment_size": msg.get("fragment_size", None),
             "queue_length": msg.get("queue_length", 0),
             "compression": msg.get("compression", "none"),
         }
-        self._subscriptions[topic].subscribe(**subscribe_args)
+        self._subscriptions[request.topic].subscribe(**subscribe_args)
 
-        self.protocol.log("info", "Subscribed to %s" % topic)
+        self.protocol.log("info", "Subscribed to %s" % request.topic)
 
     def unsubscribe(self, msg):
         # Pull out the ID
