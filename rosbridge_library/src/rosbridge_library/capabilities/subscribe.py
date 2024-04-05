@@ -57,6 +57,10 @@ class SubscribeModel(CapabilityBaseModel):
     fragment_size: Optional[int] = None
     queue_length: Optional[int] = 0
     compression: Optional[str] = "none"
+    
+class UnsubscribeModel(CapabilityBaseModel):
+    topic: str
+    id: Optional[Any] = None
 
 
 
@@ -212,8 +216,6 @@ class Subscription:
 
 class Subscribe(Capability):
 
-    unsubscribe_msg_fields = [(True, "topic", str)]
-
     topics_glob = None
 
     def __init__(self, protocol):
@@ -226,7 +228,7 @@ class Subscribe(Capability):
 
         self._subscriptions: Dict[str, Subscription] = {}
 
-    def subscribe(self, msg):
+    def subscribe(self, msg: Dict[str, Any]):
         request = SubscribeModel.model_validate(msg)
 
         if Subscribe.topics_glob is not None and Subscribe.topics_glob:
@@ -260,23 +262,18 @@ class Subscribe(Capability):
 
         self.protocol.log("info", "Subscribed to %s" % request.topic)
 
-    def unsubscribe(self, msg):
-        # Pull out the ID
-        sid = msg.get("id", None)
+    def unsubscribe(self, msg: Dict[str, Any]):
+        request = UnsubscribeModel.model_validate(msg)
 
-        self.basic_type_check(msg, self.unsubscribe_msg_fields)
-
-        topic = msg["topic"]
-
-        if topic not in self._subscriptions:
+        if request.topic not in self._subscriptions:
             return
-        self._subscriptions[topic].unsubscribe(sid)
+        self._subscriptions[request.topic].unsubscribe(request.id)
 
-        if self._subscriptions[topic].is_empty():
-            self._subscriptions[topic].unregister()
-            del self._subscriptions[topic]
+        if self._subscriptions[request.topic].is_empty():
+            self._subscriptions[request.topic].unregister()
+            del self._subscriptions[request.topic]
 
-        self.protocol.log("info", "Unsubscribed from %s" % topic)
+        self.protocol.log("info", "Unsubscribed from %s" % request.topic)
 
     def publish(self, topic, message, fragment_size=None, compression="none"):
         """Publish a message to the client
