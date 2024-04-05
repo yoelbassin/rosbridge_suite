@@ -51,7 +51,6 @@ except ImportError:
         
 class SubscribeModel(CapabilityBaseModel):
     topic: str
-    id: Optional[Any] = None
     type: Optional[str] = None
     throttle_rate: Optional[int] = 0
     fragment_size: Optional[int] = None
@@ -60,7 +59,6 @@ class SubscribeModel(CapabilityBaseModel):
     
 class UnsubscribeModel(CapabilityBaseModel):
     topic: str
-    id: Optional[Any] = None
 
 
 
@@ -128,7 +126,7 @@ class Subscription:
             "compression": request.compression,
         }
 
-        self.clients[request.id] = client_details
+        self.clients[request.sid] = client_details
 
         self.update_params()
 
@@ -267,7 +265,7 @@ class Subscribe(Capability):
 
         if request.topic not in self._subscriptions:
             return
-        self._subscriptions[request.topic].unsubscribe(request.id)
+        self._subscriptions[request.topic].unsubscribe(request.sid)
 
         if self._subscriptions[request.topic].is_empty():
             self._subscriptions[request.topic].unregister()

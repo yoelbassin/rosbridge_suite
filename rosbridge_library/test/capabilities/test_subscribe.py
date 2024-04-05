@@ -53,7 +53,7 @@ class TestSubscribe(unittest.TestCase):
             for queue_length in range(min_queue_length, min_queue_length + 10):
                 for frag_size in range(min_frag_size, min_frag_size + 10):
                     sid = throttle_rate * 100 + queue_length * 10 + frag_size
-                    subscription.subscribe(subscribe.SubscribeModel(id=sid, type=msg_type, 
+                    subscription.subscribe(subscribe.SubscribeModel(sid=sid, type=msg_type, 
                                                                     throttle_rate=throttle_rate, 
                                                                     queue_length=queue_length, 
                                                                     fragment_size=frag_size, 

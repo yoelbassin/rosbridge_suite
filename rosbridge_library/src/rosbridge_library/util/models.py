@@ -1,5 +1,5 @@
-from typing import Any, Dict, List
-from pydantic import BaseModel, ValidationError, model_validator
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, ValidationError, model_validator, ConfigDict
 
 from rosbridge_library.internal.exceptions import InvalidArgumentException, MissingArgumentException
 
@@ -9,7 +9,11 @@ def get_missing_error(errors: List[Dict[str, Any]]):
             return error
 
 
-class CapabilityBaseModel(BaseModel):    
+class CapabilityBaseModel(BaseModel):   
+    model_config = ConfigDict(populate_by_name=True)
+    
+    sid: Optional[Union[str,int]] = Field(default=None, alias="id")
+        
     @model_validator(mode="wrap")
     def validate(self, handler):
         try:
