@@ -32,7 +32,9 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from threading import Lock, RLock
+from typing import Dict, Optional, Union
 
+from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rosbridge_library.internal import ros_loader
@@ -55,7 +57,15 @@ class MultiSubscriber:
     callbacks being called in separate threads, must lock whenever modifying
     or accessing the subscribed clients."""
 
-    def __init__(self, topic, client_id, callback, node_handle, msg_type=None, raw=False):
+    def __init__(
+        self,
+        topic: str,
+        client_id: Union[str, int],
+        callback,
+        node_handle: Node,
+        msg_type: Optional[str] = None,
+        raw: bool = False,
+    ):
         """Register a subscriber on the specified topic.
 
         Keyword arguments:
@@ -78,17 +88,20 @@ class MultiSubscriber:
         """
         # First check to see if the topic is already established
         topics_names_and_types = dict(node_handle.get_topic_names_and_types())
-        topic_type = topics_names_and_types.get(topic)
+        topic_types = topics_names_and_types.get(topic)
 
         # If it's not established and no type was specified, exception
-        if msg_type is None and topic_type is None:
+        if msg_type is None and topic_types is None:
             raise TopicNotEstablishedException(topic)
 
         # topic_type is a list of types or None at this point; only one type is supported.
-        if topic_type is not None:
-            if len(topic_type) > 1:
-                node_handle.get_logger().warning(f"More than one topic type detected: {topic_type}")
-            topic_type = topic_type[0]
+        topic_type = None
+        if topic_types is not None:
+            if len(topic_types) > 1:
+                node_handle.get_logger().warning(
+                    f"More than one topic type detected: {topic_types}"
+                )
+            topic_type = topic_types[0]
 
         # Use the established topic type if none was specified
         if msg_type is None:
@@ -116,9 +129,15 @@ class MultiSubscriber:
         )
 
         infos = node_handle.get_publishers_info_by_topic(topic)
-        if any(pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL for pub in infos):
+        if any(
+            pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL
+            for pub in infos
+        ):
             qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
-        if any(pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for pub in infos):
+        if any(
+            pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT
+            for pub in infos
+        ):
             qos.reliability = ReliabilityPolicy.BEST_EFFORT
 
         # Create the subscriber and associated member variables
@@ -133,7 +152,12 @@ class MultiSubscriber:
         self.callback_group = MutuallyExclusiveCallbackGroup()
 
         self.subscriber = node_handle.create_subscription(
-            msg_class, topic, self.callback, qos, raw=raw, callback_group=self.callback_group
+            msg_class,
+            topic,
+            self.callback,
+            qos,
+            raw=raw,
+            callback_group=self.callback_group,
         )
         self.new_subscriber = None
         self.new_subscriptions = {}
@@ -159,9 +183,11 @@ class MultiSubscriber:
 
         """
         if not ros_loader.get_message_class(msg_type) is self.msg_class:
-            raise TypeConflictException(self.topic, msg_class_type_repr(self.msg_class), msg_type)
+            raise TypeConflictException(
+                self.topic, msg_class_type_repr(self.msg_class), msg_type
+            )
 
-    def subscribe(self, client_id, callback):
+    def subscribe(self, client_id: Union[str, int], callback) -> None:
         """Subscribe the specified client to this subscriber.
 
         Keyword arguments:
@@ -186,7 +212,7 @@ class MultiSubscriber:
                     callback_group=self.callback_group,
                 )
 
-    def unsubscribe(self, client_id):
+    def unsubscribe(self, client_id: Union[str, int]) -> None:
         """Unsubscribe the specified client from this subscriber
 
         Keyword arguments:
@@ -199,7 +225,7 @@ class MultiSubscriber:
             else:
                 del self.subscriptions[client_id]
 
-    def has_subscribers(self):
+    def has_subscribers(self) -> bool:
         """Return true if there are subscribers"""
         with self.rlock:
             return len(self.subscriptions) + len(self.new_subscriptions) != 0
@@ -253,11 +279,19 @@ class SubscriberManager:
     Keeps track of client subscriptions
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = Lock()
-        self._subscribers = {}
+        self._subscribers: Dict[str, MultiSubscriber] = {}
 
-    def subscribe(self, client_id, topic, callback, node_handle, msg_type=None, raw=False):
+    def subscribe(
+        self,
+        client_id: Union[str, int],
+        topic: str,
+        callback,
+        node_handle: Node,
+        msg_type: Optional[str] = None,
+        raw: bool = False,
+    ):
         """Subscribe to a topic
 
         Keyword arguments:
@@ -278,7 +312,7 @@ class SubscriberManager:
             if msg_type is not None and not raw:
                 self._subscribers[topic].verify_type(msg_type)
 
-    def unsubscribe(self, client_id, topic):
+    def unsubscribe(self, client_id: Union[str, int], topic: str):
         """Unsubscribe from a topic
 
         Keyword arguments:
