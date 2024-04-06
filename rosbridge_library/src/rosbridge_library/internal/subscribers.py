@@ -51,65 +51,93 @@ is shared between multiple clients
 """
 
 
-def _get_message_class(
-    node_handle: Node, topic: str, msg_type: Optional[str] = None
-) -> Type:
-    # First check to see if the topic is already established
-    topics_names_and_types = dict(node_handle.get_topic_names_and_types())
-    topic_types = topics_names_and_types.get(topic)
+class SubscriptionFactory:
+    def __init__(
+        self,
+        node_handle: Node,
+        topic: str,
+        msg_class: Type,
+        qos: QoSProfile,
+        raw: bool,
+        callback_group: MutuallyExclusiveCallbackGroup,
+    ) -> None:
+        self._node_handle = node_handle
+        self._topic = topic
+        self._msg_class = msg_class
+        self._qos = qos
+        self._raw = raw
+        self._callback_group = callback_group
 
-    # If it's not established and no type was specified, exception
-    if msg_type is None and topic_types is None:
-        raise TopicNotEstablishedException(topic)
+    def create_subscriber(self, callback: Callable[[Any], None]) -> Subscription:
+        return self._node_handle.create_subscription(
+            self._msg_class,
+            self._topic,
+            callback,
+            self._qos,
+            raw=self._raw,
+            callback_group=self._callback_group,
+        )
+        
+    @staticmethod        
+    def _get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
+        # Certain combinations of publisher and subscriber QoS parameters are
+        # incompatible. Here we make a "best effort" attempt to match existing
+        # publishers for the requested topic. This is not perfect because more
+        # publishers may come online after our subscriber is set up, but we try
+        # to provide sane defaults. For more information, see:
+        # - https://docs.ros.org/en/rolling/Concepts/About-Quality-of-Service-Settings.html
+        # - https://github.com/RobotWebTools/rosbridge_suite/issues/551
+        qos = QoSProfile(
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
 
-    # topic_type is a list of types or None at this point; only one type is supported.
-    topic_type = None
-    if topic_types is not None:
-        if len(topic_types) > 1:
-            node_handle.get_logger().warning(
-                f"More than one topic type detected: {topic_types}"
-            )
-        topic_type = topic_types[0]
-
-    # Use the established topic type if none was specified
-    if msg_type is None:
-        msg_type = topic_type
-
-    # Load the message class, propagating any exceptions from bad msg types
-    msg_class = ros_loader.get_message_class(msg_type)
-
-    # Make sure the specified msg type and established msg type are same
-    msg_type_string = msg_class_type_repr(msg_class)
-    if topic_type is not None and topic_type != msg_type_string:
-        raise TypeConflictException(topic, topic_type, msg_type_string)
-    return msg_class
+        infos = node_handle.get_publishers_info_by_topic(topic)
+        if any(
+            pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL for pub in infos
+        ):
+            qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        if any(
+            pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for pub in infos
+        ):
+            qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        return qos
 
 
-def _get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
-    # Certain combinations of publisher and subscriber QoS parameters are
-    # incompatible. Here we make a "best effort" attempt to match existing
-    # publishers for the requested topic. This is not perfect because more
-    # publishers may come online after our subscriber is set up, but we try
-    # to provide sane defaults. For more information, see:
-    # - https://docs.ros.org/en/rolling/Concepts/About-Quality-of-Service-Settings.html
-    # - https://github.com/RobotWebTools/rosbridge_suite/issues/551
-    qos = QoSProfile(
-        depth=10,
-        durability=DurabilityPolicy.VOLATILE,
-        reliability=ReliabilityPolicy.RELIABLE,
-    )
+    @staticmethod
+    def _get_message_class(
+        node_handle: Node, topic: str, msg_type: Optional[str] = None
+    ) -> Type:
+        # First check to see if the topic is already established
+        topics_names_and_types = dict(node_handle.get_topic_names_and_types())
+        topic_types = topics_names_and_types.get(topic)
 
-    infos = node_handle.get_publishers_info_by_topic(topic)
-    if any(
-        pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL for pub in infos
-    ):
-        qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
-    if any(
-        pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for pub in infos
-    ):
-        qos.reliability = ReliabilityPolicy.BEST_EFFORT
-    return qos
+        # If it's not established and no type was specified, exception
+        if msg_type is None and topic_types is None:
+            raise TopicNotEstablishedException(topic)
 
+        # topic_type is a list of types or None at this point; only one type is supported.
+        topic_type = None
+        if topic_types is not None:
+            if len(topic_types) > 1:
+                node_handle.get_logger().warning(
+                    f"More than one topic type detected: {topic_types}"
+                )
+            topic_type = topic_types[0]
+
+        # Use the established topic type if none was specified
+        if msg_type is None:
+            msg_type = topic_type
+
+        # Load the message class, propagating any exceptions from bad msg types
+        msg_class = ros_loader.get_message_class(msg_type)
+
+        # Make sure the specified msg type and established msg type are same
+        msg_type_string = msg_class_type_repr(msg_class)
+        if topic_type is not None and topic_type != msg_type_string:
+            raise TypeConflictException(topic, topic_type, msg_type_string)
+        return msg_class    
 
 class MultiSubscriber:
     """Handles multiple clients for a single subscriber.
@@ -147,29 +175,27 @@ class MultiSubscriber:
         different to the user-specified msg_type
 
         """
-        msg_class = _get_message_class(node_handle, topic, msg_type)
+        self._msg_class = SubscriptionFactory._get_message_class(node_handle, topic, msg_type)
+        self._topic = topic
 
-        qos = _get_default_qos(node_handle, topic)
+        qos = SubscriptionFactory._get_default_qos(node_handle, topic)
+
+        self._subscriber_factory = SubscriptionFactory(
+            node_handle=node_handle,
+            topic=topic,
+            msg_class=self._msg_class,
+            qos=qos,
+            raw=raw,
+            callback_group=MutuallyExclusiveCallbackGroup(),
+        )
 
         # Create the subscriber and associated member variables
         # Subscriptions is initialized with the current client to start with.
         self._subscriptions = {client_id: callback}
         self._rlock = RLock()
-        self._msg_class = msg_class
         self._node_handle = node_handle
-        self._topic = topic
-        self._qos = qos
-        self._raw = raw
-        self._callback_group = MutuallyExclusiveCallbackGroup()
 
-        self._subscriber = node_handle.create_subscription(
-            msg_class,
-            topic,
-            self._callback,
-            qos,
-            raw=raw,
-            callback_group=self._callback_group,
-        )
+        self._subscriber = self._subscriber_factory.create_subscriber(self._callback)
 
         self._new_subscriber: Optional[Subscription] = None
         self._new_subscriptions: Dict[
@@ -217,13 +243,8 @@ class MultiSubscriber:
             # which adds the new callback to the subscriptions dictionary.
             self._new_subscriptions.update({client_id: callback})
             if self._new_subscriber is None:
-                self._new_subscriber = self._node_handle.create_subscription(
-                    self._msg_class,
-                    self._topic,
-                    self._new_sub_callback,
-                    self._qos,
-                    raw=self._raw,
-                    callback_group=self._callback_group,
+                self._new_subscriber = self._subscriber_factory.create_subscriber(
+                    self._new_sub_callback
                 )
 
     def unsubscribe(self, client_id: Union[str, int]) -> None:
