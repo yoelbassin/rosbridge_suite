@@ -32,7 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from threading import Lock, RLock
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Type
 
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -48,6 +48,38 @@ from rosbridge_library.internal.topics import (
 """ Manages and interfaces with ROS Subscriber objects.  A single subscriber
 is shared between multiple clients
 """
+
+
+def get_message_class(node_handle: Node, topic: str, msg_type: Optional[str] = None) -> Type:
+     # First check to see if the topic is already established
+    topics_names_and_types = dict(node_handle.get_topic_names_and_types())
+    topic_types = topics_names_and_types.get(topic)
+
+    # If it's not established and no type was specified, exception
+    if msg_type is None and topic_types is None:
+        raise TopicNotEstablishedException(topic)
+
+    # topic_type is a list of types or None at this point; only one type is supported.
+    topic_type = None
+    if topic_types is not None:
+        if len(topic_types) > 1:
+            node_handle.get_logger().warning(
+                f"More than one topic type detected: {topic_types}"
+            )
+        topic_type = topic_types[0]
+
+    # Use the established topic type if none was specified
+    if msg_type is None:
+        msg_type = topic_type
+
+    # Load the message class, propagating any exceptions from bad msg types
+    msg_class = ros_loader.get_message_class(msg_type)
+
+    # Make sure the specified msg type and established msg type are same
+    msg_type_string = msg_class_type_repr(msg_class)
+    if topic_type is not None and topic_type != msg_type_string:
+        raise TypeConflictException(topic, topic_type, msg_type_string) 
+    return msg_class
 
 
 class MultiSubscriber:
@@ -86,34 +118,8 @@ class MultiSubscriber:
         different to the user-specified msg_type
 
         """
-        # First check to see if the topic is already established
-        topics_names_and_types = dict(node_handle.get_topic_names_and_types())
-        topic_types = topics_names_and_types.get(topic)
-
-        # If it's not established and no type was specified, exception
-        if msg_type is None and topic_types is None:
-            raise TopicNotEstablishedException(topic)
-
-        # topic_type is a list of types or None at this point; only one type is supported.
-        topic_type = None
-        if topic_types is not None:
-            if len(topic_types) > 1:
-                node_handle.get_logger().warning(
-                    f"More than one topic type detected: {topic_types}"
-                )
-            topic_type = topic_types[0]
-
-        # Use the established topic type if none was specified
-        if msg_type is None:
-            msg_type = topic_type
-
-        # Load the message class, propagating any exceptions from bad msg types
-        msg_class = ros_loader.get_message_class(msg_type)
-
-        # Make sure the specified msg type and established msg type are same
-        msg_type_string = msg_class_type_repr(msg_class)
-        if topic_type is not None and topic_type != msg_type_string:
-            raise TypeConflictException(topic, topic_type, msg_type_string)
+        msg_class = get_message_class(node_handle, topic, msg_type)
+       
 
         # Certain combinations of publisher and subscriber QoS parameters are
         # incompatible. Here we make a "best effort" attempt to match existing
