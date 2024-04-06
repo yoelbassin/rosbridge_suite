@@ -32,10 +32,11 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from threading import Lock, RLock
-from typing import Any, Callable, Dict, Optional, Union, Type
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union, Type
 
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.subscription import Subscription
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rosbridge_library.internal import ros_loader
 from rosbridge_library.internal.message_conversion import msg_class_type_repr
@@ -50,8 +51,10 @@ is shared between multiple clients
 """
 
 
-def get_message_class(node_handle: Node, topic: str, msg_type: Optional[str] = None) -> Type:
-     # First check to see if the topic is already established
+def _get_message_class(
+    node_handle: Node, topic: str, msg_type: Optional[str] = None
+) -> Type:
+    # First check to see if the topic is already established
     topics_names_and_types = dict(node_handle.get_topic_names_and_types())
     topic_types = topics_names_and_types.get(topic)
 
@@ -78,11 +81,11 @@ def get_message_class(node_handle: Node, topic: str, msg_type: Optional[str] = N
     # Make sure the specified msg type and established msg type are same
     msg_type_string = msg_class_type_repr(msg_class)
     if topic_type is not None and topic_type != msg_type_string:
-        raise TypeConflictException(topic, topic_type, msg_type_string) 
+        raise TypeConflictException(topic, topic_type, msg_type_string)
     return msg_class
 
 
-def get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
+def _get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
     # Certain combinations of publisher and subscriber QoS parameters are
     # incompatible. Here we make a "best effort" attempt to match existing
     # publishers for the requested topic. This is not perfect because more
@@ -98,16 +101,14 @@ def get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
 
     infos = node_handle.get_publishers_info_by_topic(topic)
     if any(
-        pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL
-        for pub in infos
+        pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL for pub in infos
     ):
         qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
     if any(
-        pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT
-        for pub in infos
+        pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for pub in infos
     ):
-        qos.reliability = ReliabilityPolicy.BEST_EFFORT  
-    return qos  
+        qos.reliability = ReliabilityPolicy.BEST_EFFORT
+    return qos
 
 
 class MultiSubscriber:
@@ -121,7 +122,7 @@ class MultiSubscriber:
         self,
         topic: str,
         client_id: Union[str, int],
-        callback,
+        callback: Callable[[OutgoingMessage], None],
         node_handle: Node,
         msg_type: Optional[str] = None,
         raw: bool = False,
@@ -146,9 +147,9 @@ class MultiSubscriber:
         different to the user-specified msg_type
 
         """
-        msg_class = get_message_class(node_handle, topic, msg_type)
-       
-        qos = get_default_qos(node_handle, topic)
+        msg_class = _get_message_class(node_handle, topic, msg_type)
+
+        qos = _get_default_qos(node_handle, topic)
 
         # Create the subscriber and associated member variables
         # Subscriptions is initialized with the current client to start with.
@@ -169,9 +170,11 @@ class MultiSubscriber:
             raw=raw,
             callback_group=self._callback_group,
         )
-        
-        self._new_subscriber = None
-        self._new_subscriptions: Dict[Union[str, int], Callable[[Any], None]] = {}
+
+        self._new_subscriber: Optional[Subscription] = None
+        self._new_subscriptions: Dict[
+            Union[str, int], Callable[[OutgoingMessage], None]
+        ] = {}
 
     def unregister(self):
         self._node_handle.destroy_subscription(self._subscriber)
@@ -241,7 +244,11 @@ class MultiSubscriber:
         with self._rlock:
             return len(self._subscriptions) + len(self._new_subscriptions) != 0
 
-    def _callback(self, msg, callbacks=None):
+    def _callback(
+        self,
+        msg,
+        callbacks: Optional[Iterable[Callable[[OutgoingMessage], None]]] = None,
+    ):
         """Callback for incoming messages on the rclpy subscription.
 
         Passes the message to registered subscriber callbacks.
