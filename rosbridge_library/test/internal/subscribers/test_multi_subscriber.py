@@ -84,13 +84,13 @@ class TestMultiSubscriber(unittest.TestCase):
             topic, self.client_id, lambda *args: None, self.node, msg_type=msg_type
         )
         self.assertTrue(is_topic_subscribed(self.node, topic))
-        self.assertEqual(len(multi.new_subscriptions), 0)
+        self.assertEqual(len(multi._new_subscriptions), 0)
 
         multi.subscribe(self.client_id, None)
-        self.assertEqual(len(multi.new_subscriptions), 1)
+        self.assertEqual(len(multi._new_subscriptions), 1)
 
         multi.unsubscribe(self.client_id)
-        self.assertEqual(len(multi.new_subscriptions), 0)
+        self.assertEqual(len(multi._new_subscriptions), 0)
 
         multi.unregister()
         self.assertFalse(is_topic_subscribed(self.node, topic))

@@ -32,7 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 from threading import Lock, RLock
-from typing import Dict, Optional, Union, Type
+from typing import Any, Callable, Dict, Optional, Union, Type
 
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -152,33 +152,34 @@ class MultiSubscriber:
 
         # Create the subscriber and associated member variables
         # Subscriptions is initialized with the current client to start with.
-        self.subscriptions = {client_id: callback}
-        self.rlock = RLock()
-        self.msg_class = msg_class
-        self.node_handle = node_handle
-        self.topic = topic
-        self.qos = qos
-        self.raw = raw
-        self.callback_group = MutuallyExclusiveCallbackGroup()
+        self._subscriptions = {client_id: callback}
+        self._rlock = RLock()
+        self._msg_class = msg_class
+        self._node_handle = node_handle
+        self._topic = topic
+        self._qos = qos
+        self._raw = raw
+        self._callback_group = MutuallyExclusiveCallbackGroup()
 
-        self.subscriber = node_handle.create_subscription(
+        self._subscriber = node_handle.create_subscription(
             msg_class,
             topic,
-            self.callback,
+            self._callback,
             qos,
             raw=raw,
-            callback_group=self.callback_group,
+            callback_group=self._callback_group,
         )
-        self.new_subscriber = None
-        self.new_subscriptions = {}
+        
+        self._new_subscriber = None
+        self._new_subscriptions: Dict[Union[str, int], Callable[[Any], None]] = {}
 
     def unregister(self):
-        self.node_handle.destroy_subscription(self.subscriber)
-        with self.rlock:
-            self.subscriptions.clear()
-            if self.new_subscriber:
-                self.node_handle.destroy_subscription(self.new_subscriber)
-                self.new_subscriber = None
+        self._node_handle.destroy_subscription(self._subscriber)
+        with self._rlock:
+            self._subscriptions.clear()
+            if self._new_subscriber:
+                self._node_handle.destroy_subscription(self._new_subscriber)
+                self._new_subscriber = None
 
     def verify_type(self, msg_type):
         """Verify that the subscriber subscribes to messages of this type.
@@ -192,9 +193,9 @@ class MultiSubscriber:
         this publisher
 
         """
-        if not ros_loader.get_message_class(msg_type) is self.msg_class:
+        if ros_loader.get_message_class(msg_type) is not self._msg_class:
             raise TypeConflictException(
-                self.topic, msg_class_type_repr(self.msg_class), msg_type
+                self._topic, msg_class_type_repr(self._msg_class), msg_type
             )
 
     def subscribe(self, client_id: Union[str, int], callback) -> None:
@@ -206,20 +207,20 @@ class MultiSubscriber:
         messages
 
         """
-        with self.rlock:
+        with self._rlock:
             # If the topic is latched, adding a new subscriber will immediately invoke
             # the given callback.
             # In any case, the first message is handled using new_sub_callback,
             # which adds the new callback to the subscriptions dictionary.
-            self.new_subscriptions.update({client_id: callback})
-            if self.new_subscriber is None:
-                self.new_subscriber = self.node_handle.create_subscription(
-                    self.msg_class,
-                    self.topic,
+            self._new_subscriptions.update({client_id: callback})
+            if self._new_subscriber is None:
+                self._new_subscriber = self._node_handle.create_subscription(
+                    self._msg_class,
+                    self._topic,
                     self._new_sub_callback,
-                    self.qos,
-                    raw=self.raw,
-                    callback_group=self.callback_group,
+                    self._qos,
+                    raw=self._raw,
+                    callback_group=self._callback_group,
                 )
 
     def unsubscribe(self, client_id: Union[str, int]) -> None:
@@ -229,18 +230,18 @@ class MultiSubscriber:
         client_id -- the ID of the client to unsubscribe
 
         """
-        with self.rlock:
-            if client_id in self.new_subscriptions:
-                del self.new_subscriptions[client_id]
+        with self._rlock:
+            if client_id in self._new_subscriptions:
+                del self._new_subscriptions[client_id]
             else:
-                del self.subscriptions[client_id]
+                del self._subscriptions[client_id]
 
     def has_subscribers(self) -> bool:
         """Return true if there are subscribers"""
-        with self.rlock:
-            return len(self.subscriptions) + len(self.new_subscriptions) != 0
+        with self._rlock:
+            return len(self._subscriptions) + len(self._new_subscriptions) != 0
 
-    def callback(self, msg, callbacks=None):
+    def _callback(self, msg, callbacks=None):
         """Callback for incoming messages on the rclpy subscription.
 
         Passes the message to registered subscriber callbacks.
@@ -252,8 +253,8 @@ class MultiSubscriber:
         """
         outgoing = OutgoingMessage(msg)
 
-        with self.rlock:
-            callbacks = callbacks or self.subscriptions.values()
+        with self._rlock:
+            callbacks = callbacks or self._subscriptions.values()
 
             # Pass the JSON to each of the callbacks
             for callback in callbacks:
@@ -261,7 +262,7 @@ class MultiSubscriber:
                     callback(outgoing)
                 except Exception as exc:
                     # Do nothing if one particular callback fails except log it
-                    self.node_handle.get_logger().error(
+                    self._node_handle.get_logger().error(
                         f"Exception calling subscribe callback: {exc}"
                     )
 
@@ -276,12 +277,12 @@ class MultiSubscriber:
         the subscriptions dictionary is updated with the newly incorporated
         subscriptors.
         """
-        with self.rlock:
-            self.callback(msg, self.new_subscriptions.values())
-            self.subscriptions.update(self.new_subscriptions)
-            self.new_subscriptions = {}
-            self.node_handle.destroy_subscription(self.new_subscriber)
-            self.new_subscriber = None
+        with self._rlock:
+            self._callback(msg, self._new_subscriptions.values())
+            self._subscriptions.update(self._new_subscriptions)
+            self._new_subscriptions = {}
+            self._node_handle.destroy_subscription(self._new_subscriber)
+            self._new_subscriber = None
 
 
 class SubscriberManager:
