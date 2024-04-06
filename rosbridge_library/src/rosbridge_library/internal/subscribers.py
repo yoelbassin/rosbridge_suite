@@ -82,6 +82,34 @@ def get_message_class(node_handle: Node, topic: str, msg_type: Optional[str] = N
     return msg_class
 
 
+def get_default_qos(node_handle: Node, topic: str) -> QoSProfile:
+    # Certain combinations of publisher and subscriber QoS parameters are
+    # incompatible. Here we make a "best effort" attempt to match existing
+    # publishers for the requested topic. This is not perfect because more
+    # publishers may come online after our subscriber is set up, but we try
+    # to provide sane defaults. For more information, see:
+    # - https://docs.ros.org/en/rolling/Concepts/About-Quality-of-Service-Settings.html
+    # - https://github.com/RobotWebTools/rosbridge_suite/issues/551
+    qos = QoSProfile(
+        depth=10,
+        durability=DurabilityPolicy.VOLATILE,
+        reliability=ReliabilityPolicy.RELIABLE,
+    )
+
+    infos = node_handle.get_publishers_info_by_topic(topic)
+    if any(
+        pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL
+        for pub in infos
+    ):
+        qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+    if any(
+        pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT
+        for pub in infos
+    ):
+        qos.reliability = ReliabilityPolicy.BEST_EFFORT  
+    return qos  
+
+
 class MultiSubscriber:
     """Handles multiple clients for a single subscriber.
 
@@ -120,31 +148,7 @@ class MultiSubscriber:
         """
         msg_class = get_message_class(node_handle, topic, msg_type)
        
-
-        # Certain combinations of publisher and subscriber QoS parameters are
-        # incompatible. Here we make a "best effort" attempt to match existing
-        # publishers for the requested topic. This is not perfect because more
-        # publishers may come online after our subscriber is set up, but we try
-        # to provide sane defaults. For more information, see:
-        # - https://docs.ros.org/en/rolling/Concepts/About-Quality-of-Service-Settings.html
-        # - https://github.com/RobotWebTools/rosbridge_suite/issues/551
-        qos = QoSProfile(
-            depth=10,
-            durability=DurabilityPolicy.VOLATILE,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-
-        infos = node_handle.get_publishers_info_by_topic(topic)
-        if any(
-            pub.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL
-            for pub in infos
-        ):
-            qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
-        if any(
-            pub.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT
-            for pub in infos
-        ):
-            qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        qos = get_default_qos(node_handle, topic)
 
         # Create the subscriber and associated member variables
         # Subscriptions is initialized with the current client to start with.
