@@ -89,7 +89,7 @@ class Subscription:
         self,
         client_id: Union[str, int],
         topic: str,
-        publish: Callable[[Dict[str, Any], int, int], None],
+        publish: Callable[[Dict[str, Any], Optional[int], str], None],
         node_handle: Node,
     ) -> None:
         """Create a subscription for the specified client on the specified
@@ -111,7 +111,12 @@ class Subscription:
 
         self.handler = MessageHandler(None, self._publish)
         self.handler_lock = Lock()
-        self.update_params()
+
+        # params
+        self.throttle_rate = 0
+        self.queue_length = 0
+        self.fragment_size = None
+        self.compression = "none"
 
     def unregister(self) -> None:
         """Unsubscribes this subscription and cleans up resources"""
@@ -193,12 +198,6 @@ class Subscription:
     def update_params(self) -> None:
         """Determine the 'lowest common denominator' params to satisfy all
         subscribed clients."""
-        if len(self.clients) == 0:
-            self.throttle_rate = 0
-            self.queue_length = 0
-            self.fragment_size = None
-            self.compression = "none"
-            return
 
         def f(fieldname: str) -> List[Any]:
             return [x[fieldname] for x in self.clients.values()]
